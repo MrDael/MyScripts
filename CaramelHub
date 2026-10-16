@@ -57,7 +57,7 @@ local okParent = pcall(function() gui.Parent = (gethui and gethui()) or game:Get
 if not okParent or not gui.Parent then gui.Parent = lp:WaitForChild("PlayerGui") end
 
 local WIDTH = 320
-local HEIGHTS = { pesca = 424, coleta = 542, mina = 566, horta = 352, painel = 556 }
+local HEIGHTS = { pesca = 424, coleta = 542, mina = 544, horta = 352, painel = 556 }
 local win = new("Frame", {
     Size = UDim2.fromOffset(WIDTH, HEIGHTS[tab]), Position = UDim2.fromOffset(30, 60),
     BackgroundColor3 = C.bg, BorderSizePixel = 0, ClipsDescendants = true,
@@ -2710,8 +2710,8 @@ local function MOD_MINA(HUB)
         - Anda sozinho até os minérios (desviando de paredes), aperta E e joga o minigame do anel:
           clica quando a bolinha passa no CENTRO da zona (vermelho = crítico). Nunca clica no cinza.
         - Escolhe a escada certa ("Descer") e ignora a central ("Subir") e a porta da superfície.
-        - Modos: coletar tudo / só os marcados / só descer. Dá para descer sem minerar até um andar
-          e parar num andar final.
+        - Modos: coletar tudo / só os marcados. Pula minério ocupado por outro jogador.
+          Botão "Previsão de andar" estima até onde dá para chegar antes da mina reiniciar.
         - Pega baús, conta tudo e entra de novo na mina depois que ela reinicia.
         - Ctrl abre/fecha o HUD.
     ]]
@@ -2736,7 +2736,7 @@ local function MOD_MINA(HUB)
         minigameTimeout = 18,
         startWait     = 2.2,   -- espera o minigame começar depois do E
         maxAttempts   = 3,
-        skipSeconds   = 120,
+        skipSeconds   = 45,
     }
     local NAV = { cell = 1.0, pad = 0.9, reach = 0.9, learnSpread = 2, maxExpand = 450000 }
     local KEYS = {
@@ -2750,7 +2750,7 @@ local function MOD_MINA(HUB)
     local ORE_LABEL = { stone = "Pedra", copper = "Cobre", iron = "Ferro", gold = "Ouro", emerald = "Esmeralda",
         ruby = "Rubi", sapphire = "Safira", crystal = "Cristal", diamond = "Diamante", amethyst = "Ametista" }
     local ORE_ORDER = { stone = 1, copper = 2, iron = 3, gold = 4, emerald = 5, ruby = 6, sapphire = 7, crystal = 8 }
-    local MODE_LABEL = { "Coletar tudo e descer", "Só os marcados e descer", "Só descer (achar a escada)" }
+    local MODE_LABEL = { "Coletar tudo e descer", "Só os marcados e descer" }
 
     ------------------------------------------------------------------ ESTADO
     local alive, running = true, false
@@ -2762,7 +2762,11 @@ local function MOD_MINA(HUB)
     local learned, learnedDirty = {}, false
     local worldDirty = true
     local skipUntil, attempts, typeFails = {}, {}, {}
-    local locked = {}                      -- tipos de minério que a picareta não consegue (nesta sessão)
+    -- busyN: vezes que o minério estava ocupado · X.typeNodes: nós distintos que falharam por tipo · X.invSeq: itens recebidos (prova de que o baú abriu)
+    local X = { busyN = {}, typeNodes = {}, invSeq = 0, scanNoPrompt = 0, diagEpoch = -1,
+        NOPROMPT = { Enabled = false, MaxActivationDistance = 7, ActionText = "" } }
+    local locked = {}                      -- tipos de minério que a picareta não consegue (vale por alguns minutos)
+    local typesSig = ""
     local ores, chests, descent = {}, {}, nil
     local typeCount = {}
     local exitFound, elevatorFound = false, false
@@ -2777,9 +2781,13 @@ local function MOD_MINA(HUB)
     local doneChest = {}
     local elapsed, runSince = 0, nil
     local stat = { hits = 0, miss = 0 }
+    local othersAt = {}                    -- posição (x,z) dos outros jogadores, atualizada a cada decisão
+    local fc = { arrivals = {}, durs = {}, last = nil, start = nil } -- medição de tempo por andar (previsão)
+    local lastIdleLog, lastSkipReset = 0, 0
+    local seenOdd = {}
 
     local cfg = {
-        types = {}, mode = 1, descendUntil = 0, stopFloor = 0, chests = true, asap = false,
+        types = {}, mode = 1, chests = true, asap = false, avgFloor = 0,
         reenter = true, antiAfk = false, entrance = nil,
         totals = { ore = {}, chests = 0, floors = 0 },
     }
@@ -2795,7 +2803,7 @@ local function MOD_MINA(HUB)
                 end
                 if type(t.entrance) == "table" then cfg.entrance = t.entrance end
                 if type(cfg.totals.ore) ~= "table" then cfg.totals.ore = {} end
-                cfg.mode = math.clamp(math.floor(cfg.mode), 1, 3)
+                cfg.mode = math.clamp(math.floor(cfg.mode), 1, 2)
             end
         end
     end)
@@ -2855,9 +2863,11 @@ local function MOD_MINA(HUB)
 
     local startBtn = button("▶  Iniciar mineração", 1, true)
     local modeBtn = button("", 2)
-    numRow("Descer sem minerar até o andar (0 = não)", 3, function() return cfg.descendUntil end, function(n) cfg.descendUntil = n end)
-    numRow("Parar de descer no andar (0 = sem limite)", 4, function() return cfg.stopFloor end, function(n) cfg.stopFloor = n end)
+    local forecastBtn = button("◔  Previsão de andar", 3)
     local chestBtn, asapBtn = halfRow(5, "", "")
+    asapBtn.Visible = false
+    chestBtn.Size = UDim2.new(1, 0, 1, 0)
+    cfg.asap = false
     local reBtn, afkBtn = halfRow(6, "", "")
     afkBtn.Visible = false
     reBtn.Size = UDim2.new(1, 0, 1, 0)
@@ -3261,13 +3271,45 @@ local function MOD_MINA(HUB)
         local nOres, nChests, nDescent, nItems, counts = {}, {}, nil, {}, {}
         local ex, el = false, false
         local fl
-        for _, o in ipairs(world:GetChildren()) do
+        local cands = {}
+        for _, c in ipairs(world:GetChildren()) do
+            if c:IsA("BasePart") then
+                cands[#cands + 1] = c
+            elseif c:IsA("Model") or c:IsA("Folder") then -- baús fixos podem estar dentro de um grupo
+                for _, d in ipairs(c:GetDescendants()) do
+                    if d:IsA("BasePart") then cands[#cands + 1] = d end
+                end
+            end
+        end
+        local noPromptN = 0
+        for _, o in ipairs(cands) do
             if o:IsA("BasePart") then
+                local id0 = o:GetAttribute("Id")
+                local ids0 = type(id0) == "string" and id0 or ""
+                local idl0 = ids0:lower()
                 local pr = o:FindFirstChildOfClass("ProximityPrompt")
+                if not pr and (ids0:sub(1, 10) == "mine-node:" or idl0:find("chest", 1, true) or idl0:find("cache", 1, true)) then
+                    pr = o:FindFirstChildWhichIsA("ProximityPrompt", true) -- botão dentro de uma pasta
+                end
+                if not pr and ids0:sub(1, 10) == "mine-node:" then
+                    -- minério sem botão agora (ocupado por outro jogador / recarregando): lembra dele em vez de "sumir"
+                    local it = { part = o, prompt = X.NOPROMPT, id = id0, kind = "ore", name = o.Name, noPrompt = true }
+                    nOres[#nOres + 1] = it
+                    nItems[#nItems + 1] = it
+                    counts[o.Name] = (counts[o.Name] or 0) + 1
+                    noPromptN = noPromptN + 1
+                    local f0 = ids0:match("^mine%-node:mine%-(%d+):")
+                    if f0 then fl = tonumber(f0) end
+                end
                 if pr then
                     local id = o:GetAttribute("Id")
                     local ids = type(id) == "string" and id or ""
                     local act = pr.ActionText
+                    local nmL, actL = o.Name:lower(), tostring(act):lower()
+                    local chestLike = (actL == "abrir" or actL == "open" or nmL:find("chest", 1, true) or nmL:find("baú", 1, true)
+                        or nmL:find("bau", 1, true) or nmL:find("treasure", 1, true) or nmL:find("tesouro", 1, true)
+                        or ids:lower():find("chest", 1, true) or ids:lower():find("cache", 1, true))
+                        and not (nmL:find("shop", 1, true) or nmL:find("crate", 1, true))
                     if ids:sub(1, 10) == "mine-node:" then
                         local it = { part = o, prompt = pr, id = id, kind = "ore", name = o.Name }
                         nOres[#nOres + 1] = it
@@ -3275,8 +3317,16 @@ local function MOD_MINA(HUB)
                         counts[o.Name] = (counts[o.Name] or 0) + 1
                         local f = ids:match("^mine%-node:mine%-(%d+):")
                         if f then fl = tonumber(f) end
-                    elseif ids:sub(1, 11) == "mine-chest:" then
-                        local it = { part = o, prompt = pr, id = id, kind = "chest", name = o.Name }
+                    elseif ids:sub(1, 11) == "mine-chest:" or chestLike then
+                        local it = { part = o, prompt = pr, id = id, kind = "chest", name = o.Name,
+                            fixed = ids:sub(1, 11) ~= "mine-chest:" }
+                        if ids:sub(1, 11) ~= "mine-chest:" then
+                            local sig = ("%s|%s|%s"):format(o.Name, ids, tostring(act))
+                            if not seenOdd[sig] then
+                                seenOdd[sig] = true
+                                dbg(("baú fixo/diferente reconhecido: nome=%s id=%s ação=%s"):format(o.Name, ids, tostring(act)))
+                            end
+                        end
                         nChests[#nChests + 1] = it
                         nItems[#nItems + 1] = it
                     elseif o.Name == "Mine Descent" or act == "Descer" then
@@ -3286,13 +3336,52 @@ local function MOD_MINA(HUB)
                         el = true
                     elseif o.Name == "Mine Exit" or act == "Subir" then
                         ex = true
+                    else
+                        -- botão que o script não conhece: anota (uma vez) para eu poder ajustar
+                        local sig = ("%s|%s|%s"):format(o.Name, ids, tostring(act))
+                        if not seenOdd[sig] and (seenOdd.n or 0) < 40 and (ids ~= "" or o.Name ~= "") then
+                            seenOdd[sig] = true
+                            seenOdd.n = (seenOdd.n or 0) + 1
+                            dbg(("botão desconhecido: nome=%s id=%s ação=%s ligado=%s"):format(o.Name, ids, tostring(act), tostring(pr.Enabled)))
+                        end
                     end
                 end
             end
         end
         ores, chests, descent, items, typeCount = nOres, nChests, nDescent, nItems, counts
+        X.scanNoPrompt = noPromptN
         exitFound, elevatorFound = ex, el
         if fl and not sceneChanging then floor = fl end
+    end
+
+    local function diagFloor()
+        if not floor or floor % 10 ~= 0 or X.diagEpoch == sceneEpoch then return end
+        X.diagEpoch = sceneEpoch
+        local world = workspace:FindFirstChild(CFG.worldName)
+        if not world then return end
+        dbg(("== diagnóstico do andar %d (procurando baús fixos) =="):format(floor))
+        local seen, n = {}, 0
+        for _, o in ipairs(world:GetDescendants()) do
+            if o:IsA("BasePart") and n < 45 then
+                local id = o:GetAttribute("Id")
+                id = type(id) == "string" and id or ""
+                local pr = o:FindFirstChildWhichIsA("ProximityPrompt", true)
+                local nm, idl = o.Name:lower(), id:lower()
+                local interesting = pr or nm:find("chest", 1, true) or nm:find("treasure", 1, true) or nm:find("cache", 1, true)
+                    or idl:find("chest", 1, true) or idl:find("cache", 1, true)
+                if interesting and id:sub(1, 10) ~= "mine-node:" then
+                    local idShort = (id:gsub("%x%x%x%x%x%x%x%x%-[%x%-]+", "#"))
+                    local sig = o.Name .. "|" .. idShort .. "|" .. (pr and pr.ActionText or "-")
+                    if not seen[sig] then
+                        seen[sig] = true
+                        n = n + 1
+                        dbg(("  %s | id=%s | pai=%s | botão=%s ligado=%s | pos=(%.0f, %.0f)"):format(o.Name, idShort, o.Parent and o.Parent.Name or "?",
+                            pr and pr.ActionText or "nenhum", pr and tostring(pr.Enabled) or "-", o.Position.X, o.Position.Z))
+                    end
+                end
+            end
+        end
+        dbg("== fim do diagnóstico ==")
     end
 
     local function worldInMine()
@@ -3315,11 +3404,86 @@ local function MOD_MINA(HUB)
         return false
     end
 
+    ------------------------------------------------------------------ PREVISÃO DE ANDAR (medição)
+    local CYCLE_SECONDS = 600
+    local function resetForecast()
+        fc = { arrivals = {}, exact = {}, durs = {}, last = nil, start = nil, firstF = nil }
+    end
+    resetForecast()
+    local function onFloorArrive(f, approx)
+        if type(f) ~= "number" then return end
+        local now = os.clock()
+        if fc.last == f then return end
+        if fc.last and f <= fc.last then resetForecast() end -- voltou para cima ou mina nova: começa outra medição
+        if fc.last and f == fc.last + 1 and fc.exact[fc.last] and not approx then
+            local dur = now - fc.arrivals[fc.last]
+            fc.durs[#fc.durs + 1] = { f = fc.last, secs = dur }
+            cfg.avgFloor = (cfg.avgFloor and cfg.avgFloor > 0) and (cfg.avgFloor * 0.7 + dur * 0.3) or dur
+            save()
+        end
+        fc.arrivals[f] = now
+        fc.exact[f] = not approx
+        fc.last = f
+        fc.start = fc.start or now
+        fc.firstF = fc.firstF or f
+    end
+    -- quanto falta para a mina reiniciar (se o jogo não informar, estima pelo momento em que você entrou)
+    local function cycleRemaining()
+        local r = HUB.mineRemaining and HUB.mineRemaining()
+        if r then return r, false end
+        if fc.start then return math.max(0, CYCLE_SECONDS - (os.clock() - fc.start)), true end
+        return nil
+    end
+    local function forecast()
+        local f = floor
+        if not f or not fc.arrivals[f] then return nil, "Entre na mina e comece a minerar: a previsão aparece depois do primeiro andar." end
+        local n = #fc.durs
+        local avg, lo, hi, prior, src
+        if n > 0 then
+            src = "últimos 4"
+            local from = math.max(1, n - 3)
+            local sum, cnt = 0, 0
+            lo, hi = math.huge, 0
+            for i = from, n do
+                local d = fc.durs[i].secs
+                sum, cnt = sum + d, cnt + 1
+                lo, hi = math.min(lo, d), math.max(hi, d)
+            end
+            avg = sum / cnt
+        elseif fc.start and fc.firstF and f > fc.firstF and fc.arrivals[f] > fc.start then
+            -- ainda não mediu andar por andar: usa o tempo que levou até chegar no andar atual
+            avg = (fc.arrivals[f] - fc.start) / (f - fc.firstF)
+            lo, hi = avg * 0.8, avg * 1.25
+            src = ("%d andares desde que começou"):format(f - fc.firstF)
+        elseif cfg.avgFloor and cfg.avgFloor > 0 then
+            avg, prior = cfg.avgFloor, true
+            src = "estimativa antiga"
+            lo, hi = avg * 0.8, avg * 1.25
+        else
+            return nil, "Preciso medir pelo menos 1 andar completo para estimar."
+        end
+        local R, estimated = cycleRemaining()
+        if not R then return nil, "Não consegui saber quanto falta para a mina reiniciar." end
+        local spent = os.clock() - fc.arrivals[f]
+        local function reach(t)
+            local cur = math.max(0, t - spent) -- o que falta para terminar o andar atual
+            if R < cur then return f end
+            return f + 1 + math.floor((R - cur) / t)
+        end
+        local function eta(m, t) -- segundos até chegar no andar m
+            local cur = math.max(0, t - spent)
+            return (m == f + 1) and cur or (cur + (m - f - 1) * t)
+        end
+        return { f = f, avg = avg, lo = lo, hi = hi, prior = prior, src = src, R = R, estimated = estimated, spent = spent,
+            mid = reach(avg), best = reach(lo), worst = reach(hi), eta = eta, durs = fc.durs, n = n }
+    end
+
     local function resetFloorState()
         grid = nil
         learned = {}
         learnedDirty = false
         skipUntil, attempts = {}, {}
+        X.busyN = {}
         doneChest = {}
         worldDirty = true
     end
@@ -3339,6 +3503,7 @@ local function MOD_MINA(HUB)
         floor = pendingFloor
         sceneIsMine = pendingIsMine
         resetFloorState()
+        onFloorArrive(floor)
         dbg("cena carregada. andar = " .. tostring(floor))
     end)
     evOk.sync = hookEvent("syncActiveScene", function() worldDirty = true end)
@@ -3367,6 +3532,8 @@ local function MOD_MINA(HUB)
         end
         dbg("mineração terminou: " .. tostring(d.reason) .. " " .. tostring(d.rewardItemId))
     end)
+
+    evOk.inv = hookEvent("inventoryItemAdded", function() X.invSeq = X.invSeq + 1 end)
 
     ------------------------------------------------------------------ MINIGAME
     local function pgFind(path)
@@ -3465,6 +3632,26 @@ local function MOD_MINA(HUB)
         return mg.ended and mg.ended.reason or "timeout"
     end
 
+    -- outros jogadores (para saber se um minério está ocupado)
+    local function refreshOthers()
+        othersAt = {}
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl ~= lp then
+                local c = pl.Character
+                local hrp = c and (c:FindFirstChild("HumanoidRootPart") or c.PrimaryPart)
+                if hrp then othersAt[#othersAt + 1] = Vector2.new(hrp.Position.X, hrp.Position.Z) end
+            end
+        end
+    end
+    local function othersNear(it, radius)
+        local p = Vector2.new(it.part.Position.X, it.part.Position.Z)
+        for _, o in ipairs(othersAt) do
+            if (o - p).Magnitude < radius then return true end
+        end
+        return false
+    end
+    local function occupied(it) return it.kind == "ore" and othersNear(it, 4.5) end
+
     ------------------------------------------------------------------ ANDAR ATÉ O ALVO
     local function ensureGrid()
         if grid and not worldDirty then return end
@@ -3500,6 +3687,12 @@ local function MOD_MINA(HUB)
                 releaseAll(); lastNavError = "demorou demais"; return false
             elseif sceneChanging then
                 releaseAll(); lastNavError = "trocando de cena"; return false
+            elseif it.kind == "ore" and (os.clock() - t0) > 0.5 and (function()
+                    local nowC = os.clock()
+                    if nowC - (it.lastOthers or 0) > 0.4 then it.lastOthers = nowC; refreshOthers() end
+                    return occupied(it)
+                end)() then
+                releaseAll(); lastNavError = "ocupado"; return false
             else
                 local now = os.clock()
                 local pos = xz(r.Position)
@@ -3590,10 +3783,25 @@ local function MOD_MINA(HUB)
     end
 
     local function mineNode(it)
-        if not goTo(it) then return "walk" end
+        if not goTo(it) then
+            if lastNavError == "ocupado" then return "busy" end
+            return "walk"
+        end
         releaseAll()
         task.wait(0.15)
+        if it.noPrompt then
+            -- o botão pode aparecer quando chegamos perto; espera um pouco e, se não vier, pula com recuo
+            local w0 = os.clock()
+            while running and os.clock() - w0 < 3 do
+                local pr = it.part:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if pr then it.prompt = pr; it.noPrompt = nil; break end
+                task.wait(0.15)
+            end
+            if it.noPrompt then return "busy" end
+        end
         waitEnabled(it, 0.8)
+        refreshOthers()
+        if it.prompt.Enabled == false and othersNear(it, 7) then return "busy" end
         for _ = 1, 2 do
             mg.active, mg.ended = false, nil
             if not fireOrTap(it) then return "noprompt" end
@@ -3602,24 +3810,42 @@ local function MOD_MINA(HUB)
             if mg.active or mgVisible() then
                 return playMinigame()
             end
+            refreshOthers()
+            if othersNear(it, 7) then return "busy" end -- não abriu porque outro jogador está nele
             task.wait(0.3)
         end
+        refreshOthers()
+        if othersNear(it, 30) then return "busy" end -- tem gente por perto: quase certo que é outro jogador, não a picareta
         return "nostart"
     end
 
+    local function chestSig(it)
+        local img = it.part:FindFirstChildWhichIsA("ImageLabel", true)
+        if not img then return "" end
+        return tostring(img.Image) .. "|" .. img.ImageRectOffset.X .. "|" .. img.ImageRectOffset.Y
+    end
     local function collectChest(it)
         if not goTo(it) then return false end
         releaseAll()
         task.wait(0.15)
-        waitEnabled(it, 0.8)
-        if not fireOrTap(it) then return false end
-        task.wait(0.8)
-        if not stillThere(it) or not it.prompt.Enabled then
-            doneChest[it.part] = true
-            cfg.totals.chests = cfg.totals.chests + 1
-            save()
-            return true
+        waitEnabled(it, 1.0)
+        local seq0, sig0 = X.invSeq, chestSig(it)
+        for _ = 1, 2 do
+            if not fireOrTap(it) then return false end
+            local w0 = os.clock()
+            while running and os.clock() - w0 < 1.6 do
+                -- abriu = chegou item, ou o baú sumiu / mudou de desenho / o botão apagou
+                if X.invSeq ~= seq0 or not stillThere(it) or not it.prompt.Enabled or chestSig(it) ~= sig0 then
+                    doneChest[it.part] = true
+                    cfg.totals.chests = cfg.totals.chests + 1
+                    save()
+                    dbg(("baú aberto: %s (%s)%s"):format(it.name, tostring(it.id), it.fixed and " [fixo]" or ""))
+                    return true
+                end
+                task.wait(0.1)
+            end
         end
+        dbg(("baú: apertei E mas nada mudou (%s / %s)"):format(it.name, tostring(it.id)))
         return false
     end
 
@@ -3762,9 +3988,10 @@ local function MOD_MINA(HUB)
         return (Vector2.new(it.part.Position.X, it.part.Position.Z) - me).Magnitude
     end
 
+
     local function available(it)
         local now = os.clock()
-        return stillThere(it) and not (skipUntil[it.part] and skipUntil[it.part] > now)
+        return stillThere(it) and not (skipUntil[it.part] and skipUntil[it.part] > now) and not occupied(it)
     end
 
     local function nearest(list, me, filter)
@@ -3778,37 +4005,35 @@ local function MOD_MINA(HUB)
         return best, bd
     end
 
+    -- tipo travado (picareta fraca?) agora vale só por alguns minutos; depois tenta de novo
+    local function isLocked(name)
+        local t = locked[name]
+        if not t then return false end
+        if t ~= true and os.clock() > t then
+            locked[name] = nil
+            typeFails[name] = nil
+            typesSig = ""
+            return false
+        end
+        return true
+    end
     local function typeWanted(it)
-        return cfg.types[it.name] ~= false and not locked[it.name]
+        return not it.noPrompt and cfg.types[it.name] ~= false and not isLocked(it.name)
     end
 
     -- devolve { kind = "mine"|"chest"|"descend"|"wait", it = ..., why = ... }
     local function decide(me)
-        local f = floor or 0
-        local canDescend = (cfg.stopFloor == 0) or (f < cfg.stopFloor)
-        local descendOnly = (cfg.mode == 3) or (cfg.descendUntil > 0 and floor ~= nil and floor < cfg.descendUntil)
-        local descentOk = descent and available(descent) and canDescend
+        refreshOthers()
+        local descentOk = descent and available(descent)
 
-        local function anyOre(it) return not locked[it.name] end
-
-        if descendOnly then
-            if descentOk then return { kind = "descend", it = descent } end
-            if cfg.chests then
-                local c, d = nearest(chests, me, function(it) return not doneChest[it.part] end)
-                if c and d < 30 then return { kind = "chest", it = c } end
-            end
-            local o = nearest(ores, me, anyOre)
-            if o then return { kind = "mine", it = o, why = "procurando a escada" } end
-            return { kind = "wait", why = descent and "Andar final alcançado." or "Sem minério e sem escada visíveis…" }
-        end
-
-        if cfg.asap and descentOk then return { kind = "descend", it = descent } end
+        local function anyOre(it) return not it.noPrompt and not isLocked(it.name) end
 
         local pool
         if cfg.mode == 1 then pool = nearest(ores, me, anyOre)
         else pool = nearest(ores, me, typeWanted) end
         local chest
         if cfg.chests then chest = nearest(chests, me, function(it) return not doneChest[it.part] end) end
+        if chest and chest.fixed then return { kind = "chest", it = chest, why = "baú fixo" } end -- baús fixos (andar 10, 20…) têm prioridade
         if chest and pool then
             if dist2(chest, me) < dist2(pool, me) + 25 then return { kind = "chest", it = chest } end
         elseif chest then
@@ -3816,18 +4041,44 @@ local function MOD_MINA(HUB)
         end
         if pool then return { kind = "mine", it = pool } end
         if descentOk then return { kind = "descend", it = descent } end
-        if canDescend then
-            local o = nearest(ores, me, anyOre)
-            if o then return { kind = "mine", it = o, why = "para a escada aparecer" } end
+        local o = nearest(ores, me, anyOre)
+        if o then return { kind = "mine", it = o, why = "para a escada aparecer" } end
+        -- minérios sem botão (ocupados/recarregando): vai até eles para o botão aparecer, em vez de ficar parado
+        local np = nearest(ores, me, function(it) return it.noPrompt and not isLocked(it.name) end)
+        if np then return { kind = "mine", it = np, why = "esperando o botão aparecer" } end
+
+        -- nada disponível: descobre o porquê (e não fica 2 minutos parado)
+        local now = os.clock()
+        local nOre, nSkipped, nBusy, nLocked = #ores, 0, 0, 0
+        for _, it in ipairs(ores) do
+            if skipUntil[it.part] and skipUntil[it.part] > now then nSkipped = nSkipped + 1 end
+            if occupied(it) then nBusy = nBusy + 1 end
+            if isLocked(it.name) then nLocked = nLocked + 1 end
         end
-        if not canDescend and f > 0 then
-            return { kind = "wait", why = ("Andar %d concluído. Esperando a mina reiniciar…"):format(f) }
+        if now - lastIdleLog > 10 then
+            lastIdleLog = now
+            dbg(("nada para fazer: minérios=%d (sem botão=%d) pulados=%d ocupados=%d travados=%d baús=%d escada=%s andar=%s"):format(
+                nOre, X.scanNoPrompt, nSkipped, nBusy, nLocked, #chests, tostring(descent ~= nil), tostring(floor)))
+        end
+        if nSkipped > 0 and now - lastSkipReset > 8 then
+            lastSkipReset = now
+            skipUntil, attempts = {}, {}
+            dbg("tudo estava pulado; limpei a lista e vou tentar de novo")
+            return { kind = "wait", why = "Tentando os minérios de novo…" }
+        end
+        if nBusy > 0 and nBusy >= nOre - nLocked then
+            return { kind = "wait", why = "Esperando outro jogador liberar o minério…" }
+        end
+        if nLocked > 0 and nLocked >= nOre then
+            return { kind = "wait", why = "Tipos de minério travados por falhas; destravam sozinhos em até 1 min (ou use Esquecer bloqueios)." }
+        end
+        if nOre == 0 and not descent then
+            return { kind = "wait", why = "Procurando minério ou escada (nada carregado por perto)…" }
         end
         return { kind = "wait", why = "Nada para fazer agora (esperando)…" }
     end
 
     ------------------------------------------------------------------ HUD
-    local typesSig = ""
     local function oreLabel(n) return ORE_LABEL[n] or n end
 
     local rebuildTypes
@@ -3842,7 +4093,7 @@ local function MOD_MINA(HUB)
         end)
         local sig = {}
         for _, n in ipairs(names) do
-            sig[#sig + 1] = ("%s%d%d%s%s"):format(n, typeCount[n] or 0, cfg.totals.ore[n] or 0, tostring(cfg.types[n] ~= false), tostring(locked[n] == true))
+            sig[#sig + 1] = ("%s%d%d%s%s"):format(n, typeCount[n] or 0, cfg.totals.ore[n] or 0, tostring(cfg.types[n] ~= false), tostring(isLocked(n)))
         end
         local s = table.concat(sig, ",")
         if s == typesSig then return end
@@ -3859,15 +4110,15 @@ local function MOD_MINA(HUB)
         for i, n in ipairs(names) do
             local on = cfg.types[n] ~= false
             local txt = ("%s %s   ·  andar: %d  ·  total: %d"):format(on and "☑" or "☐", oreLabel(n), typeCount[n] or 0, cfg.totals.ore[n] or 0)
-            if locked[n] then txt = txt .. "  ·  picareta fraca?" end
+            if isLocked(n) then txt = txt .. "  ·  picareta fraca?" end
             local b = new("TextButton", { Text = txt, Font = Enum.Font.GothamMedium, TextSize = 12,
-                TextColor3 = locked[n] and C.accent or (on and C.text or C.muted),
+                TextColor3 = isLocked(n) and C.accent or (on and C.text or C.muted),
                 TextXAlignment = Enum.TextXAlignment.Left, BackgroundColor3 = C.bg, Size = UDim2.new(1, 0, 0, 24),
                 LayoutOrder = i }, typesBox)
             round(b, 7)
             new("UIPadding", { PaddingLeft = UDim.new(0, 8) }, b)
             b.MouseButton1Click:Connect(function()
-                if locked[n] then locked[n] = nil; typeFails[n] = nil else cfg.types[n] = not on end
+                if isLocked(n) then locked[n] = nil; typeFails[n] = nil else cfg.types[n] = not on end
                 save()
                 typesSig = ""
                 rebuildTypes()
@@ -3884,22 +4135,20 @@ local function MOD_MINA(HUB)
         modeBtn.Text = "◈  Modo: " .. MODE_LABEL[cfg.mode]
         chestBtn.Text = cfg.chests and "▣  Baús: ligado" or "▣  Baús: desligado"
         chestBtn.TextColor3 = cfg.chests and C.ok or C.muted
-        asapBtn.Text = cfg.asap and "⇩  Descer ao ver escada" or "⇩  Terminar o andar"
-        asapBtn.TextColor3 = cfg.asap and C.ok or C.muted
         reBtn.Text = cfg.reenter and "⟳  Reentrar: ligado" or "⟳  Reentrar: desligado"
         reBtn.TextColor3 = cfg.reenter and C.ok or C.muted
         afkBtn.Text = cfg.antiAfk and "☾  Anti-AFK: ligado" or "☾  Anti-AFK: desligado"
         afkBtn.TextColor3 = cfg.antiAfk and C.ok or C.muted
     end
     paintButtons()
-    modeBtn.MouseButton1Click:Connect(function() cfg.mode = cfg.mode % 3 + 1; save(); paintButtons() end)
+    modeBtn.MouseButton1Click:Connect(function() cfg.mode = cfg.mode % 2 + 1; save(); paintButtons() end)
     chestBtn.MouseButton1Click:Connect(function() cfg.chests = not cfg.chests; save(); paintButtons() end)
-    asapBtn.MouseButton1Click:Connect(function() cfg.asap = not cfg.asap; save(); paintButtons() end)
     reBtn.MouseButton1Click:Connect(function() cfg.reenter = not cfg.reenter; save(); paintButtons() end)
     afkBtn.MouseButton1Click:Connect(function() cfg.antiAfk = not cfg.antiAfk; save(); paintButtons() end)
     forgetBtn.MouseButton1Click:Connect(function()
         learned, learnedDirty = {}, false
-        locked, typeFails = {}, {}
+        locked, typeFails, X.typeNodes, X.busyN = {}, {}, {}, {}
+        skipUntil, attempts = {}, {}
         typesSig = ""
         setStatus("Bloqueios aprendidos e travas de picareta apagados.", C.ok)
     end)
@@ -3926,6 +4175,73 @@ local function MOD_MINA(HUB)
             setStatus("Nenhum botão de interação por perto. Chegue perto da entrada da mina.", C.accent)
         end
     end)
+
+    ------------------------------------------------------------------ JANELA DA PREVISÃO
+    local function hexc(c)
+        return ("#%02x%02x%02x"):format(math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+    end
+    local FM, FA, FO = hexc(C.muted), hexc(C.accent), hexc(C.ok)
+    local fOpen = false
+    local fwin = new("Frame", { Size = UDim2.fromOffset(310, 340), BackgroundColor3 = C.bg, BorderSizePixel = 0, Visible = false }, gui)
+    round(fwin, 14)
+    new("UIStroke", { Color = C.line, Thickness = 1 }, fwin)
+    new("TextLabel", { Text = "Previsão de andar", Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = C.text,
+        TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 0), Size = UDim2.new(1, -60, 0, 40) }, fwin)
+    local fClose = new("TextButton", { Text = "✕", Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = C.accent,
+        BackgroundColor3 = C.panel, Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -38, 0, 7) }, fwin)
+    round(fClose, 7)
+    local fText = new("TextLabel", { Text = "", Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = C.text, RichText = true,
+        TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+        BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 46), Size = UDim2.new(1, -32, 1, -56) }, fwin)
+    fClose.MouseButton1Click:Connect(function() fOpen = false; fwin.Visible = false end)
+    forecastBtn.MouseButton1Click:Connect(function() fOpen = not fOpen end)
+
+    local function fmtMS(t)
+        t = math.max(0, math.floor(t + 0.5))
+        return ("%d:%02d"):format(t // 60, t % 60)
+    end
+    local function refreshForecast()
+        if floor and worldInMine() and not fc.arrivals[floor] then onFloorArrive(floor, true) end
+        local show = fOpen and body.Visible and win.Visible
+        fwin.Visible = show
+        if not show then return end
+        local vp = gui.AbsoluteSize
+        local x = win.AbsolutePosition.X + win.AbsoluteSize.X + 10
+        if x + 310 > vp.X then x = math.max(0, win.AbsolutePosition.X - 320) end
+        fwin.Position = UDim2.fromOffset(x, win.AbsolutePosition.Y)
+
+        local fcst, msg = forecast()
+        if not fcst then
+            fText.Text = ("<font color='%s'>%s</font>"):format(FM, msg or "…")
+            return
+        end
+        local L = {}
+        L[#L + 1] = ("<b>Andar atual</b>  %d   <font color='%s'>· há %s nesse andar</font>"):format(fcst.f, FM, fmtMS(fcst.spent))
+        L[#L + 1] = ("<b>Tempo por andar</b>  %s   <font color='%s'>(%s%s – %s)</font>"):format(
+            fmtMS(fcst.avg), FM, (fcst.src or "") .. " · ", fmtMS(fcst.lo), fmtMS(fcst.hi))
+        L[#L + 1] = ("<b>Mina reinicia em</b>  %s%s"):format(fmtMS(fcst.R), fcst.estimated and (" <font color='" .. FM .. "'>(estimado pela entrada)</font>") or "")
+        L[#L + 1] = ""
+        L[#L + 1] = ("<font color='%s'><b>Previsão: andar %d</b></font>"):format(FO, fcst.mid)
+        L[#L + 1] = ("<font color='%s'>melhor caso %d  ·  pior caso %d</font>"):format(FM, fcst.best, fcst.worst)
+        L[#L + 1] = ""
+        L[#L + 1] = ("<b>Marcos</b> <font color='%s'>(baús fixos)</font>"):format(FM)
+        for _, m in ipairs({ 10, 20, 30 }) do
+            if m <= fcst.f then
+                L[#L + 1] = ("  andar %d  <font color='%s'>já passou</font>"):format(m, FM)
+            else
+                local t = fcst.eta(m, fcst.avg)
+                local fits = t <= fcst.R
+                L[#L + 1] = ("  andar %d  ~%s  <font color='%s'>%s</font>"):format(m, fmtMS(t), fits and FO or FA, fits and "✓ dá tempo" or "✗ não dá tempo")
+            end
+        end
+        if fcst.n > 0 then
+            L[#L + 1] = ""
+            local parts = {}
+            for i = math.max(1, fcst.n - 5), fcst.n do parts[#parts + 1] = ("a%d %s"):format(fcst.durs[i].f, fmtMS(fcst.durs[i].secs)) end
+            L[#L + 1] = ("<font color='%s'>Medido: %s</font>"):format(FM, table.concat(parts, " · "))
+        end
+        fText.Text = table.concat(L, "\n")
+    end
 
     local function refreshStats()
         local t = elapsed + (runSince and (os.clock() - runSince) or 0)
@@ -3973,6 +4289,7 @@ local function MOD_MINA(HUB)
                     end
                 else
                     scan()
+                    pcall(diagFloor)
                     local me = xz(r.Position)
                     local inMine = worldInMine()
                     if inMine and not wasMine then
@@ -3981,6 +4298,7 @@ local function MOD_MINA(HUB)
                     end
                     if wasMine and not inMine then
                         local rem = HUB.mineRemaining and HUB.mineRemaining()
+                        resetForecast()
                         dbg("saí da mina (cena=" .. tostring(sceneIsMine) .. ", ciclo restante=" .. (rem and ("%.0f s"):format(rem) or "?") .. ")")
                         HUB.notify("info", "Mineração", "Fora da mina. Voltando…", { silent = true })
                     end
@@ -4050,16 +4368,30 @@ local function MOD_MINA(HUB)
                             setStatus(("Minerando %s%s (%dm)…"):format(oreLabel(it.name),
                                 act.why and (" — " .. act.why) or "", math.floor(dist2(it, me))))
                             local res = mineNode(it)
-                            if res == "reward" then
+                            if res == "busy" then
+                                X.busyN[it.part] = (X.busyN[it.part] or 0) + 1
+                                local back = math.min(90, 12 * 2 ^ (X.busyN[it.part] - 1)) -- 12, 24, 48, 90 s: não insiste no mesmo minério
+                                skipUntil[it.part] = os.clock() + back
+                                setStatus(("Minério ocupado por outro jogador. Pulando por %ds e indo para outro…"):format(back), C.accent)
+                                dbg(("minério ocupado: %s (vez %d, recuo %ds)"):format(it.name, X.busyN[it.part], back))
+                                task.wait(0.4)
+                            elseif res == "reward" then
                                 attempts[it.part] = nil
+                                X.busyN[it.part] = nil
                                 typeFails[it.name] = nil
+                                X.typeNodes[it.name] = nil
                                 setStatus(("Coletou %s!"):format(oreLabel(it.name)), C.ok)
                             elseif running then
                                 attempts[it.part] = (attempts[it.part] or 0) + 1
                                 if res == "nostart" or res == "noprompt" then
-                                    typeFails[it.name] = (typeFails[it.name] or 0) + 1
-                                    if typeFails[it.name] >= 3 then
-                                        locked[it.name] = true
+                                    -- só trava o tipo se falhou em 4 minérios DIFERENTES (um só ocupado não trava nada)
+                                    X.typeNodes[it.name] = X.typeNodes[it.name] or {}
+                                    X.typeNodes[it.name][it.part] = true
+                                    local nn = 0
+                                    for _ in pairs(X.typeNodes[it.name]) do nn = nn + 1 end
+                                    typeFails[it.name] = nn
+                                    if nn >= 4 then
+                                        locked[it.name] = os.clock() + 60
                                         typesSig = ""
                                         setStatus(("%s: o minigame não abre. Picareta fraca ou sem picareta na mão? Vou pular esse tipo."):format(oreLabel(it.name)), C.accent)
                                         task.wait(1.5)
@@ -4105,6 +4437,7 @@ local function MOD_MINA(HUB)
         alive, running = false, false
         pcall(releaseAll)
         save()
+        pcall(function() fwin:Destroy() end)
         pcall(function() if writefile then writefile(LOGFILE, table.concat(logLines, "\n")) end end)
         for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
     end
@@ -4119,6 +4452,7 @@ local function MOD_MINA(HUB)
     task.spawn(function()
         while alive do
             pcall(refreshStats)
+            pcall(refreshForecast)
             pcall(rebuildTypes)
             if logDirty then
                 logDirty = false
