@@ -2865,9 +2865,6 @@ local function MOD_MINA(HUB)
     local modeBtn = button("", 2)
     local forecastBtn = button("◔  Previsão de andar", 3)
     local chestBtn, asapBtn = halfRow(5, "", "")
-    asapBtn.Visible = false
-    chestBtn.Size = UDim2.new(1, 0, 1, 0)
-    cfg.asap = false
     local reBtn, afkBtn = halfRow(6, "", "")
     afkBtn.Visible = false
     reBtn.Size = UDim2.new(1, 0, 1, 0)
@@ -4028,6 +4025,8 @@ local function MOD_MINA(HUB)
 
         local function anyOre(it) return not it.noPrompt and not isLocked(it.name) end
 
+        if cfg.asap and descentOk then return { kind = "descend", it = descent } end
+
         local pool
         if cfg.mode == 1 then pool = nearest(ores, me, anyOre)
         else pool = nearest(ores, me, typeWanted) end
@@ -4135,6 +4134,8 @@ local function MOD_MINA(HUB)
         modeBtn.Text = "◈  Modo: " .. MODE_LABEL[cfg.mode]
         chestBtn.Text = cfg.chests and "▣  Baús: ligado" or "▣  Baús: desligado"
         chestBtn.TextColor3 = cfg.chests and C.ok or C.muted
+        asapBtn.Text = cfg.asap and "⇩  Só descer (ao ver escada)" or "⇩  Terminar o andar"
+        asapBtn.TextColor3 = cfg.asap and C.ok or C.muted
         reBtn.Text = cfg.reenter and "⟳  Reentrar: ligado" or "⟳  Reentrar: desligado"
         reBtn.TextColor3 = cfg.reenter and C.ok or C.muted
         afkBtn.Text = cfg.antiAfk and "☾  Anti-AFK: ligado" or "☾  Anti-AFK: desligado"
@@ -4143,6 +4144,7 @@ local function MOD_MINA(HUB)
     paintButtons()
     modeBtn.MouseButton1Click:Connect(function() cfg.mode = cfg.mode % 2 + 1; save(); paintButtons() end)
     chestBtn.MouseButton1Click:Connect(function() cfg.chests = not cfg.chests; save(); paintButtons() end)
+    asapBtn.MouseButton1Click:Connect(function() cfg.asap = not cfg.asap; save(); paintButtons() end)
     reBtn.MouseButton1Click:Connect(function() cfg.reenter = not cfg.reenter; save(); paintButtons() end)
     afkBtn.MouseButton1Click:Connect(function() cfg.antiAfk = not cfg.antiAfk; save(); paintButtons() end)
     forgetBtn.MouseButton1Click:Connect(function()
