@@ -1,5 +1,5 @@
 --[[
-    CARAMELO TUDO  —  Pesca + Coleta + Mineração + Geral num script só
+    CARAMEL HUB  —  Pesca + Coleta + Mineração + Horta + Geral num script só
     - Abas: Pesca, Coleta (forragear com radar), Mina (mineração automática) e Geral (hora do jogo, reset da mina,
       loja de sementes, clima estimado, plantas raras, avisos com som, histórico, anti-AFK único)
     - Ctrl   : abre / fecha o HUB
@@ -20,14 +20,14 @@ for _, k in ipairs({ "CarameloHub", "CarameloPesca", "CarameloColeta", "Caramelo
     if env[k] then pcall(env[k].destroy) end
 end
 
-local C = {
-    bg     = Color3.fromRGB(38, 38, 36),
-    panel  = Color3.fromRGB(51, 51, 48),
-    line   = Color3.fromRGB(70, 69, 64),
-    accent = Color3.fromRGB(217, 119, 87),
-    text   = Color3.fromRGB(250, 249, 245),
-    muted  = Color3.fromRGB(176, 174, 165),
-    ok     = Color3.fromRGB(129, 178, 115),
+local C = { -- tema inicial: Preto (os outros temas trocam estes valores em tempo real)
+    bg     = Color3.fromRGB(10, 10, 12),
+    panel  = Color3.fromRGB(22, 22, 26),
+    line   = Color3.fromRGB(44, 44, 52),
+    accent = Color3.fromRGB(214, 138, 52),
+    text   = Color3.fromRGB(245, 245, 245),
+    muted  = Color3.fromRGB(150, 150, 160),
+    ok     = Color3.fromRGB(96, 200, 120),
 }
 local function new(cls, props, parent)
     local o = Instance.new(cls)
@@ -43,7 +43,7 @@ local tab = "pesca"
 pcall(function()
     if isfile and isfile(HUB_FILE) then
         local t = HttpService:JSONDecode(readfile(HUB_FILE))
-        if type(t) == "table" and (t.tab == "pesca" or t.tab == "coleta" or t.tab == "mina" or t.tab == "painel") then tab = t.tab end
+        if type(t) == "table" and (t.tab == "pesca" or t.tab == "coleta" or t.tab == "mina" or t.tab == "horta" or t.tab == "painel") then tab = t.tab end
     end
 end)
 
@@ -56,56 +56,69 @@ pcall(function() if syn and syn.protect_gui then syn.protect_gui(gui) end end)
 local okParent = pcall(function() gui.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
 if not okParent or not gui.Parent then gui.Parent = lp:WaitForChild("PlayerGui") end
 
-local WIDTH = 320
-local HEIGHTS = { pesca = 424, coleta = 542, mina = 544, horta = 352, painel = 556 }
+local WIDTH, HEIGHT, MINW = 880, 520, 300
+local SIDE_W, PAGE_W = 140, 360
 local win = new("Frame", {
-    Size = UDim2.fromOffset(WIDTH, HEIGHTS[tab]), Position = UDim2.fromOffset(30, 60),
+    Size = UDim2.fromOffset(WIDTH, HEIGHT), Position = UDim2.fromOffset(30, 50),
     BackgroundColor3 = C.bg, BorderSizePixel = 0, ClipsDescendants = true,
 }, gui)
-round(win, 12)
+round(win, 14)
 new("UIStroke", { Color = C.line, Thickness = 1 }, win)
 
-local top = new("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1 }, win)
-local dot = new("Frame", { Size = UDim2.fromOffset(8, 8), Position = UDim2.fromOffset(14, 16),
+local top = new("Frame", { Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1 }, win)
+local dot = new("Frame", { Size = UDim2.fromOffset(10, 10), Position = UDim2.fromOffset(16, 18),
     BackgroundColor3 = C.accent, BorderSizePixel = 0 }, top)
-round(dot, 4)
+round(dot, 5)
 new("TextLabel", {
-    Text = "Caramelo Tudo", Font = Enum.Font.GothamBold, TextSize = 14,
+    Text = "Caramel Hub", Font = Enum.Font.GothamBold, TextSize = 17,
     TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left,
-    BackgroundTransparency = 1, Position = UDim2.fromOffset(30, 0), Size = UDim2.new(1, -100, 1, 0),
+    BackgroundTransparency = 1, Position = UDim2.fromOffset(34, 0), Size = UDim2.new(1, -120, 1, 0),
 }, top)
 local minBtn = new("TextButton", {
     Text = "–", Font = Enum.Font.GothamBold, TextSize = 18, TextColor3 = C.muted,
-    BackgroundColor3 = C.panel, Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -66, 0, 7),
+    BackgroundColor3 = C.panel, Size = UDim2.fromOffset(28, 28), Position = UDim2.new(1, -72, 0, 9),
 }, top)
-round(minBtn, 7)
+round(minBtn, 8)
 local closeBtn = new("TextButton", {
     Text = "✕", Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = C.accent,
-    BackgroundColor3 = C.panel, Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -36, 0, 7),
+    BackgroundColor3 = C.panel, Size = UDim2.fromOffset(28, 28), Position = UDim2.new(1, -38, 0, 9),
 }, top)
-round(closeBtn, 7)
+round(closeBtn, 8)
+local hline = new("Frame", { BackgroundColor3 = C.line, BorderSizePixel = 0, Position = UDim2.fromOffset(12, 46),
+    Size = UDim2.new(1, -24, 0, 1) }, win)
+local vline = new("Frame", { BackgroundColor3 = C.line, BorderSizePixel = 0, Position = UDim2.fromOffset(SIDE_W + 6, 58),
+    Size = UDim2.new(0, 1, 1, -70) }, win)
 
-local tabBar = new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 44),
-    Size = UDim2.new(1, -28, 0, 30) }, win)
+local side = new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 58),
+    Size = UDim2.new(0, SIDE_W - 14, 1, -70) }, win)
+new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, side)
 local tabBtns, pages = {}, {}
-local function tabButton(id, text, x)
+local tabN = 0
+local function tabButton(id, text)
+    tabN = tabN + 1
     local b = new("TextButton", {
-        Text = text, Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = C.muted,
-        BackgroundColor3 = C.panel, AutoButtonColor = false,
-        Position = UDim2.new(x, x == 0 and 0 or 3, 0, 0), Size = UDim2.new(0.2, -3, 1, 0),
-    }, tabBar)
-    round(b, 8)
-    new("UIStroke", { Color = C.line, Thickness = 1 }, b)
+        Text = text, Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = C.muted, TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundColor3 = C.panel, AutoButtonColor = false, LayoutOrder = tabN,
+        Size = UDim2.new(1, 0, 0, 40),
+    }, side)
+    round(b, 9)
+    new("UIPadding", { PaddingLeft = UDim.new(0, 14) }, b)
     tabBtns[id] = b
-    pages[id] = new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 84),
-        Size = UDim2.new(1, -28, 1, -94), Visible = false }, win)
+    pages[id] = new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(SIDE_W + 20, 58),
+        Size = id == "painel" and UDim2.new(1, -(SIDE_W + 32), 1, -70) or UDim2.fromOffset(PAGE_W, HEIGHT - 70),
+        Visible = false }, win)
     return b
 end
-tabButton("pesca", "Pesca", 0)
-tabButton("coleta", "Coleta", 0.2)
-tabButton("mina", "Mina", 0.4)
-tabButton("horta", "Horta", 0.6)
-tabButton("painel", "Geral", 0.8)
+tabButton("pesca", "Pesca")
+tabButton("coleta", "Coleta")
+tabButton("mina", "Mina")
+tabButton("horta", "Horta")
+tabButton("painel", "Geral")
+-- painel "ao vivo" (à direita das abas de automação)
+local liveX = SIDE_W + 20 + PAGE_W + 14
+local live = new("Frame", { BackgroundColor3 = C.panel, Position = UDim2.fromOffset(liveX, 58),
+    Size = UDim2.new(1, -(liveX + 12), 1, -70), Visible = false }, win)
+round(live, 11)
 
 ------------------------------------------------------------------ GERAL (avisos, som, anti-AFK, relógio do servidor)
 local SoundService = game:GetService("SoundService")
@@ -113,7 +126,7 @@ local Debris = game:GetService("Debris")
 local RS = game:GetService("ReplicatedStorage")
 
 local GEN_FILE = "caramelo_geral.json"
-local gen = { sound = true, volume = 1.5, toast = true, antiAfk = true, chestMode = 2 }
+local gen = { sound = true, volume = 1.5, toast = true, antiAfk = true, chestMode = 2, theme = "Preto" }
 pcall(function()
     if isfile and isfile(GEN_FILE) then
         local d = HttpService:JSONDecode(readfile(GEN_FILE))
@@ -125,6 +138,52 @@ end)
 local function saveGen()
     pcall(function() if writefile then writefile(GEN_FILE, HttpService:JSONEncode(gen)) end end)
 end
+
+------------------------------------------------------------------ TEMAS
+local function rgb(r, g, b) return Color3.fromRGB(r, g, b) end
+local THEMES = {
+    { name = "Preto", c = { bg = rgb(10, 10, 12), panel = rgb(22, 22, 26), line = rgb(44, 44, 52), accent = rgb(214, 138, 52), text = rgb(245, 245, 245), muted = rgb(150, 150, 160), ok = rgb(96, 200, 120) } },
+    { name = "Claude", c = { bg = rgb(38, 38, 36), panel = rgb(51, 51, 48), line = rgb(70, 69, 64), accent = rgb(217, 119, 87), text = rgb(250, 249, 245), muted = rgb(176, 174, 165), ok = rgb(129, 178, 115) } },
+    { name = "Grafite", c = { bg = rgb(30, 32, 36), panel = rgb(42, 45, 50), line = rgb(66, 70, 78), accent = rgb(80, 150, 240), text = rgb(240, 242, 245), muted = rgb(156, 163, 175), ok = rgb(110, 200, 130) } },
+    { name = "Neon", c = { bg = rgb(8, 6, 20), panel = rgb(20, 14, 44), line = rgb(64, 40, 116), accent = rgb(240, 30, 140), text = rgb(240, 235, 255), muted = rgb(150, 140, 190), ok = rgb(40, 240, 200) } },
+    { name = "Oceano", c = { bg = rgb(6, 16, 28), panel = rgb(12, 30, 50), line = rgb(28, 62, 94), accent = rgb(0, 140, 200), text = rgb(230, 245, 255), muted = rgb(120, 160, 190), ok = rgb(80, 220, 170) } },
+    { name = "Floresta", c = { bg = rgb(10, 20, 14), panel = rgb(18, 34, 24), line = rgb(38, 66, 46), accent = rgb(56, 156, 76), text = rgb(232, 245, 232), muted = rgb(130, 165, 138), ok = rgb(170, 220, 90) } },
+    { name = "Sakura", c = { bg = rgb(28, 14, 22), panel = rgb(44, 24, 36), line = rgb(82, 46, 66), accent = rgb(232, 84, 136), text = rgb(255, 240, 246), muted = rgb(190, 140, 164), ok = rgb(140, 220, 170) } },
+    { name = "Vulcão", c = { bg = rgb(20, 8, 6), panel = rgb(36, 16, 12), line = rgb(72, 34, 26), accent = rgb(226, 66, 28), text = rgb(255, 238, 230), muted = rgb(190, 140, 126), ok = rgb(240, 190, 60) } },
+    { name = "Roxo Real", c = { bg = rgb(16, 10, 28), panel = rgb(28, 18, 50), line = rgb(58, 40, 98), accent = rgb(136, 86, 236), text = rgb(240, 234, 255), muted = rgb(160, 146, 200), ok = rgb(110, 220, 170) } },
+    { name = "Matrix", c = { bg = rgb(0, 8, 2), panel = rgb(2, 22, 8), line = rgb(0, 62, 20), accent = rgb(0, 160, 56), text = rgb(184, 255, 194), muted = rgb(80, 150, 95), ok = rgb(120, 255, 130) } },
+    { name = "Pôr do sol", c = { bg = rgb(26, 12, 26), panel = rgb(44, 22, 42), line = rgb(86, 44, 72), accent = rgb(246, 112, 56), text = rgb(255, 236, 222), muted = rgb(204, 152, 142), ok = rgb(250, 204, 84) } },
+    { name = "Gelo", c = { bg = rgb(16, 24, 32), panel = rgb(26, 40, 52), line = rgb(54, 78, 98), accent = rgb(96, 184, 228), text = rgb(238, 248, 255), muted = rgb(140, 168, 188), ok = rgb(120, 224, 190) } },
+    { name = "Creme", c = { bg = rgb(246, 240, 228), panel = rgb(232, 224, 208), line = rgb(200, 188, 166), accent = rgb(228, 150, 70), text = rgb(50, 38, 28), muted = rgb(120, 106, 90), ok = rgb(50, 136, 66) } },
+}
+local themeCbs = {}
+local function colorKey(c) return ("%d,%d,%d"):format(math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5)) end
+local function applyTheme(name)
+    local th = THEMES[1]
+    for _, t in ipairs(THEMES) do if t.name == name then th = t end end
+    local map = {}
+    for k, v in pairs(C) do map[colorKey(v)] = th.c[k] end
+    for k, v in pairs(th.c) do C[k] = v end
+    local function fix(o, prop)
+        local ok, v = pcall(function() return o[prop] end)
+        if ok and typeof(v) == "Color3" then
+            local n = map[colorKey(v)]
+            if n then pcall(function() o[prop] = n end) end
+        end
+    end
+    for _, d in ipairs(gui:GetDescendants()) do
+        if not d:GetAttribute("NoTheme") then
+            if d:IsA("GuiObject") then fix(d, "BackgroundColor3") end
+            if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then fix(d, "TextColor3") end
+            if d:IsA("TextBox") then fix(d, "PlaceholderColor3") end
+            if d:IsA("ImageLabel") or d:IsA("ImageButton") then fix(d, "ImageColor3") end
+            if d:IsA("UIStroke") then fix(d, "Color") end
+            if d:IsA("ScrollingFrame") then fix(d, "ScrollBarImageColor3") end
+        end
+    end
+    for _, f in ipairs(themeCbs) do pcall(f) end
+end
+applyTheme(gen.theme)
 
 local function srvNow()
     local ok, t = pcall(function() return workspace:GetServerTimeNow() end)
@@ -188,6 +247,7 @@ new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.Layou
     HorizontalAlignment = Enum.HorizontalAlignment.Center }, toastHost)
 local toastN = 0
 local KIND_COLOR = { info = C.muted, warn = C.accent, good = C.ok }
+table.insert(themeCbs, function() KIND_COLOR.info, KIND_COLOR.warn, KIND_COLOR.good = C.muted, C.accent, C.ok end)
 local function showToast(kind, title, text)
     toastN = toastN + 1
     local f = new("Frame", { BackgroundColor3 = C.bg, Size = UDim2.fromOffset(300, 48), LayoutOrder = toastN,
@@ -256,6 +316,7 @@ local HUB = {
     C = C, new = new, round = round, gui = gui, win = win, pages = pages, onChange = {},
     gen = gen, saveGen = saveGen, notify = notify, history = history, histCbs = histCbs, playSound = playSound,
     srvNow = srvNow, fmtTime = fmtTime, requireTimeout = requireTimeout, mineRemaining = mineRemaining,
+    THEMES = THEMES, applyTheme = applyTheme, themeCbs = themeCbs, live = live,
 }
 
 ------------------------------------------------------------------ DRAG / MINIMIZAR
@@ -283,9 +344,10 @@ local function applyTab()
     for id, b in pairs(tabBtns) do
         b.BackgroundColor3 = (id == tab) and C.accent or C.panel
         b.TextColor3 = (id == tab) and C.text or C.muted
-        b.Visible = not minimized
     end
-    win.Size = minimized and UDim2.fromOffset(WIDTH, 40) or UDim2.fromOffset(WIDTH, HEIGHTS[tab])
+    side.Visible, vline.Visible, hline.Visible = not minimized, not minimized, not minimized
+    live.Visible = (tab ~= "painel") and not minimized
+    win.Size = minimized and UDim2.fromOffset(MINW, 46) or UDim2.fromOffset(WIDTH, HEIGHT)
     minBtn.Text = minimized and "+" or "–"
     for _, f in ipairs(HUB.onChange) do pcall(f) end
 end
@@ -4183,6 +4245,7 @@ local function MOD_MINA(HUB)
         return ("#%02x%02x%02x"):format(math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
     end
     local FM, FA, FO = hexc(C.muted), hexc(C.accent), hexc(C.ok)
+    table.insert(HUB.themeCbs, function() FM, FA, FO = hexc(C.muted), hexc(C.accent), hexc(C.ok) end)
     local fOpen = false
     local fwin = new("Frame", { Size = UDim2.fromOffset(310, 340), BackgroundColor3 = C.bg, BorderSizePixel = 0, Visible = false }, gui)
     round(fwin, 14)
@@ -5409,6 +5472,8 @@ local function MOD_PAINEL(HUB)
     local Lighting = game:GetService("Lighting")
     local C, new, round = HUB.C, HUB.new, HUB.round
     local page = HUB.pages.painel
+    local colL = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(0, 340, 1, 0) }, page)
+    local colR = new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(360, 0), Size = UDim2.new(1, -360, 1, 0) }, page)
     local gen, notify, srvNow, fmtTime = HUB.gen, HUB.notify, HUB.srvNow, HUB.fmtTime
 
     local SAVE = "caramelo_painel.json"
@@ -5598,13 +5663,13 @@ local function MOD_PAINEL(HUB)
         BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 104), Font = Enum.Font.GothamMedium, TextSize = 12,
         TextColor3 = C.text, RichText = true, TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, Text = "Carregando…",
-    }, page)
+    }, colL)
 
     local function mkToggle(tbl, key, label, col, row, after)
         local b = new("TextButton", {
             Font = Enum.Font.GothamMedium, TextSize = 12, BackgroundColor3 = C.panel, AutoButtonColor = true,
             Position = UDim2.new(col * 0.5, col == 0 and 0 or 3, 0, 108 + row * 32), Size = UDim2.new(0.5, -3, 0, 28), Text = "",
-        }, page)
+        }, colL)
         round(b, 8)
         new("UIStroke", { Color = C.line, Thickness = 1 }, b)
         local function paint()
@@ -5627,16 +5692,16 @@ local function MOD_PAINEL(HUB)
     local HY = 108 + 4 * 32 + 4
     new("TextLabel", { Text = "Histórico de avisos", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = C.muted,
         TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(2, HY), Size = UDim2.new(0.4, 0, 0, 22) }, page)
+        Position = UDim2.fromOffset(2, HY), Size = UDim2.new(0.4, 0, 0, 22) }, colL)
     local testBtn = new("TextButton", { Text = "Testar som", Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = C.text,
-        BackgroundColor3 = C.panel, Position = UDim2.new(1, -150, 0, HY), Size = UDim2.fromOffset(74, 22) }, page)
+        BackgroundColor3 = C.panel, Position = UDim2.new(1, -150, 0, HY), Size = UDim2.fromOffset(74, 22) }, colL)
     round(testBtn, 6)
     local clearBtn = new("TextButton", { Text = "Limpar", Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = C.text,
-        BackgroundColor3 = C.panel, Position = UDim2.new(1, -70, 0, HY), Size = UDim2.fromOffset(70, 22) }, page)
+        BackgroundColor3 = C.panel, Position = UDim2.new(1, -70, 0, HY), Size = UDim2.fromOffset(70, 22) }, colL)
     round(clearBtn, 6)
     local box = new("ScrollingFrame", { BackgroundColor3 = C.panel, BorderSizePixel = 0, ScrollBarThickness = 4,
         ScrollBarImageColor3 = C.line, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        Position = UDim2.fromOffset(0, HY + 26), Size = UDim2.new(1, 0, 1, -(HY + 26)) }, page)
+        Position = UDim2.fromOffset(0, HY + 26), Size = UDim2.new(1, 0, 1, -(HY + 26)) }, colL)
     round(box, 9)
     new("UIPadding", { PaddingTop = UDim.new(0, 5), PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7), PaddingBottom = UDim.new(0, 5) }, box)
     local histLabel = new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
@@ -5660,6 +5725,51 @@ local function MOD_PAINEL(HUB)
     end
     HUB.histCbs[#HUB.histCbs + 1] = paintHistory
     paintHistory()
+    table.insert(HUB.themeCbs, function()
+        ACC, MUT, OKC = hex(C.accent), hex(C.muted), hex(C.ok)
+        KC.info, KC.warn, KC.good = MUT, ACC, OKC
+        paintHistory()
+    end)
+
+    ------------------------------------------------------------------ temas
+    new("TextLabel", { Text = "Temas", Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = C.text,
+        TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 22) }, colR)
+    new("TextLabel", { Text = "Clique num tema para trocar na hora. Fica salvo.", Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = C.muted,
+        TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 22), Size = UDim2.new(1, 0, 0, 16) }, colR)
+    local grid = new("ScrollingFrame", { BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = C.line,
+        Position = UDim2.fromOffset(0, 48), Size = UDim2.new(1, 0, 1, -48), CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y }, colR)
+    new("UIGridLayout", { CellSize = UDim2.fromOffset(106, 64), CellPadding = UDim2.fromOffset(7, 7), SortOrder = Enum.SortOrder.LayoutOrder }, grid)
+    local swatches = {}
+    local function markTheme()
+        for name, sw in pairs(swatches) do
+            local on = (gen.theme == name)
+            sw.stroke.Color = on and sw.th.c.accent or sw.th.c.line
+            sw.stroke.Thickness = on and 2.5 or 1
+        end
+    end
+    for i, th in ipairs(HUB.THEMES) do
+        local function tag(o) o:SetAttribute("NoTheme", true); return o end -- pré-visualização não muda de cor com o tema
+        local b = tag(new("TextButton", { Text = "", AutoButtonColor = false, BackgroundColor3 = th.c.bg, LayoutOrder = i }, grid))
+        round(b, 10)
+        local st = tag(new("UIStroke", { Color = th.c.line, Thickness = 1 }, b))
+        tag(new("TextLabel", { Text = th.name, Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = th.c.text,
+            TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(9, 7), Size = UDim2.new(1, -18, 0, 16) }, b))
+        for j, key in ipairs({ "panel", "accent", "ok", "muted" }) do
+            local sq = tag(new("Frame", { BackgroundColor3 = th.c[key], BorderSizePixel = 0,
+                Position = UDim2.fromOffset(9 + (j - 1) * 23, 36), Size = UDim2.fromOffset(19, 19) }, b))
+            round(sq, 5)
+        end
+        swatches[th.name] = { btn = b, stroke = st, th = th }
+        b.MouseButton1Click:Connect(function()
+            gen.theme = th.name
+            HUB.saveGen()
+            HUB.applyTheme(th.name)
+            markTheme()
+        end)
+    end
+    markTheme()
     testBtn.MouseButton1Click:Connect(function() notify("good", "Teste", "Se você ouviu o som, está funcionando.") end)
     clearBtn.MouseButton1Click:Connect(function()
         for i = #HUB.history, 1, -1 do HUB.history[i] = nil end
@@ -5779,6 +5889,69 @@ load("coleta", MOD_COLETA)
 load("mina", MOD_MINA)
 load("horta", MOD_HORTA)
 load("painel", MOD_PAINEL)
+
+------------------------------------------------------------------ AO VIVO (painel à direita das abas de automação)
+do
+    local live = HUB.live
+    local function hexc(c)
+        return ("#%02x%02x%02x"):format(math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+    end
+    new("TextLabel", { Text = "Ao vivo", Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left,
+        BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 8), Size = UDim2.new(1, -28, 0, 22) }, live)
+    local liveInfo = new("TextLabel", { BackgroundTransparency = 1, RichText = true, Font = Enum.Font.Gotham, TextSize = 12,
+        TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+        Position = UDim2.fromOffset(14, 34), Size = UDim2.new(1, -28, 0, 84), Text = "" }, live)
+    new("TextLabel", { Text = "Avisos recentes", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = C.muted,
+        TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 122), Size = UDim2.new(1, -28, 0, 18) }, live)
+    local lbox = new("ScrollingFrame", { BackgroundColor3 = C.bg, BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = C.line,
+        CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, Position = UDim2.fromOffset(10, 144),
+        Size = UDim2.new(1, -20, 1, -154) }, live)
+    round(lbox, 9)
+    new("UIPadding", { PaddingTop = UDim.new(0, 5), PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7), PaddingBottom = UDim.new(0, 5) }, lbox)
+    local lhist = new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = C.text, RichText = true, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Text = "" }, lbox)
+    local NAMES = { pesca = "Pesca", coleta = "Coleta", mina = "Mina", horta = "Horta" }
+    local t0 = os.clock()
+    local function esc2(x) return (tostring(x):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+    local function paintLiveHist()
+        local MUTc, ACCc, OKc = hexc(C.muted), hexc(C.accent), hexc(C.ok)
+        local kc = { info = MUTc, warn = ACCc, good = OKc }
+        local lines = {}
+        for i = #HUB.history, math.max(1, #HUB.history - 39), -1 do
+            local h = HUB.history[i]
+            lines[#lines + 1] = ("<font color='%s'>%s</font> <font color='%s'><b>%s</b></font> %s"):format(
+                MUTc, h.t, kc[h.kind] or MUTc, esc2(h.title), esc2(h.text))
+        end
+        lhist.Text = #lines > 0 and table.concat(lines, "\n") or ("<font color='%s'>Nada ainda.</font>"):format(MUTc)
+    end
+    HUB.histCbs[#HUB.histCbs + 1] = paintLiveHist
+    table.insert(HUB.themeCbs, paintLiveHist)
+    paintLiveHist()
+    task.spawn(function()
+        while true do
+            if not gui.Parent then break end
+            if live.Visible then
+                pcall(function()
+                    local MUTc, ACCc, OKc = hexc(C.muted), hexc(C.accent), hexc(C.ok)
+                    local mr = HUB.mineRemaining()
+                    local run = "nenhuma"
+                    for id, nm in pairs(NAMES) do
+                        local m = mods[id]
+                        if m and m.isRunning() then run = nm end
+                    end
+                    liveInfo.Text = table.concat({
+                        ("<font color='%s'>Automação</font>  <b>%s</b>"):format(MUTc, run),
+                        ("<font color='%s'>Mina reinicia em</font>  %s"):format(MUTc, mr and fmtTime(mr) or "—"),
+                        ("<font color='%s'>Loja renova em</font>  %s"):format(MUTc, fmtTime(300 - HUB.srvNow() % 300)),
+                        ("<font color='%s'>Aberto há</font>  %s"):format(MUTc, fmtTime(os.clock() - t0)),
+                    }, "\n")
+                end)
+            end
+            task.wait(0.5)
+        end
+    end)
+end
 
 ------------------------------------------------------------------ SÓ UMA POR VEZ
 local alive = true
